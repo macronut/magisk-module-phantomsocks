@@ -1,0 +1,28 @@
+{
+    "profiles": ["/data/phantomsocks/default.conf"],
+    "vaddrprefix": 11,
+    "services": [
+        {
+            "name": "DNS",
+            "protocol": "dns",
+            "address": "127.0.0.1:53"
+        },
+        {
+            "name": "Redirect",
+            "protocol": "redirect",
+            "address": "0.0.0.0:11"
+        }
+    ],
+    "interfaces": [
+        {
+            "name": "default",
+            "dns": "tls://8.8.4.4:853"
+        },
+        {
+            "name": "https",
+            "dns": "tls://8.8.4.4:853/?type=A",
+            "device": "wlan0",
+            "hint": "https,w-md5"
+        }
+    ]
+}

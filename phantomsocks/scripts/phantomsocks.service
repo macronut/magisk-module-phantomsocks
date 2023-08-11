@@ -1,0 +1,143 @@
+#!/system/bin/sh
+
+bin_name="phantomsocks"
+bin_path="/system/bin/${bin_name}"
+data_path="/data/phantomsocks"
+run_path="${data_path}/run"
+pid_file="${run_path}/${bin_name}.pid"
+error_log="${run_path}/error.log"
+conf_file="${data_path}/config.json"
+bin_opts="-c ${conf_file} -log 0"
+iptables_wait="iptables"
+
+
+suit_iptables_version() {
+  iptables_version=`iptables -V | grep -o "v1\.[0-9]"`
+  if [ "${iptables_version}" = "v1.4" ] ; then
+    ## fix options for lower version iptables
+    export ANDROID_DATA=/data
+    export ANDROID_ROOT=/system
+    iptables_wait="iptables -w"
+  elif [ "${iptables_version}" = "v1.6" ] || [ "${iptables_version}" = "v1.8" ] ; then
+    iptables_wait="iptables -w 100"
+  else
+    iptables_wait="echo iptables"
+  fi
+}
+
+probe_phantomsocks_alive() {
+  [ -f ${pid_file} ] && cmd_file="/proc/`cat ${pid_file}`/cmdline" || return 1
+  [ -f ${cmd_file} ] && grep -q ${bin_path} ${cmd_file} && return 0 || return 1
+}
+
+display_phantomsocks_pid() {
+  if probe_phantomsocks_alive ; then
+    echo "[Info]: ${bin_name} service is running. ( PID: `cat ${pid_file}` )"
+    return 0
+  else
+    echo "[Info]: ${bin_name} service is stopped."
+    return 1
+  fi
+}
+
+find_netstat_path() {
+  [ -f /system/bin/netstat ] && alias netstat="/system/bin/netstat" && return 0
+  [ -f /system/xbin/netstat ] && alias netstat="/system/xbin/netstat" && return 0
+  return 1
+}
+
+wait_phantomsocks_listen() {
+  wait_count=0
+  phantomsocks_pid=`cat ${pid_file}`
+  find_netstat_path && \
+  check_phantomsocks_cmd="netstat -tnlp | grep phantomsocks | grep -q LISTEN" || \
+  check_phantomsocks_cmd="ls -lh /proc/${phantomsocks_pid}/fd | grep -q socket"
+  while probe_phantomsocks_alive && ! eval "${check_phantomsocks_cmd}" && [ ${wait_count} -lt 100 ] ; do
+    sleep 1 ; wait_count=$((${wait_count} + 1))
+  done
+  if probe_phantomsocks_alive && eval "${check_phantomsocks_cmd}" ; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+create_proxy_iptables() {
+  suit_iptables_version
+  echo "[Info]: Create proxy iptables chains."
+  ${iptables_wait} -t nat -N TCP_PROXY
+  ${iptables_wait} -t nat -A TCP_PROXY -p tcp -j REDIRECT --to-ports 11
+  ${iptables_wait} -t nat -A OUTPUT -d 11.0.0.0/8 -j TCP_PROXY
+  ${iptables_wait} -t nat -A PREROUTING -d 11.0.0.0/8 -j TCP_PROXY
+  ${iptables_wait} -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
+}
+
+clean_proxy_iptables() {
+  suit_iptables_version
+  echo "[Info]: Clean proxy iptables chains."
+  ${iptables_wait} -t nat -D OUTPUT -d 11.0.0.0/8 -j TCP_PROXY 2>/dev/null
+  ${iptables_wait} -t nat -D PREROUTING -d 11.0.0.0/8 -j TCP_PROXY 2>/dev/null
+  ${iptables_wait} -t nat -D TCP_PROXY -p tcp -j REDIRECT --to-ports 11 2>/dev/null
+  ${iptables_wait} -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null
+}
+
+start_service() {
+  if probe_phantomsocks_alive ; then
+    echo "[Info]: ${bin_name} service is running. ( PID: `cat ${pid_file}` )"
+    return 0
+  elif [ -f ${conf_file} ] ; then
+    echo "[Info]: Starting ${bin_name} service."
+    mkdir -p ${run_path}
+    chown -R inet:inet ${data_path}
+    chown inet:inet ${bin_path}
+    chmod 6755 ${bin_path}
+    nohup ${bin_path} ${bin_opts} &>${error_log} &
+    echo -n $! > ${pid_file}
+    if wait_phantomsocks_listen ; then
+      echo "[Info]: ${bin_name} service is running. ( PID: `cat ${pid_file}` )"
+      return 0
+    else
+      if probe_phantomsocks_alive ; then
+        echo "[Warning]: ${bin_name} service is running but may not listening. ( PID: `cat ${pid_file}` )"
+        return 0
+      else
+        echo "[Error]: Start ${bin_name} service Failed."
+        rm -f ${pid_file}
+        return 1
+      fi
+    fi
+  else
+    return 2
+  fi
+}
+
+stop_service() {
+  if display_phantomsocks_pid ; then
+    echo "[Info]: Stopping ${bin_name} service."
+    kill `cat ${pid_file}`
+    sleep 1
+    display_phantomsocks_pid
+  fi
+  rm -f ${pid_file}
+}
+
+case "$1" in
+  start)
+    create_proxy_iptables
+    start_service
+    ;;
+  stop)
+    clean_proxy_iptables
+    stop_service
+    ;;
+  restart)
+    stop_service
+    start_service
+    ;;
+  status)
+    display_phantomsocks_pid
+    ;;
+  *)
+    echo "$0:  usage:  $0 {start|stop|restart|status}"
+    ;;
+esac

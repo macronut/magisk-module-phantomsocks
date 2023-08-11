@@ -1,0 +1,26 @@
+#!/system/bin/sh
+
+inotify=`realpath $0`
+scripts_dir=`dirname ${inotify}`
+service="${scripts_dir}/phantomsocks.service"
+
+events=$1
+monitor_dir=$2
+monitor_file=$3
+
+service_control() {
+if [ ! -f /data/phantomsocks/manual ] ; then
+  echo "${monitor_file}" >> /data/phantomsocks/run/service.log
+  echo "${events}" >> /data/phantomsocks/run/service.log
+
+  if [ "${monitor_file}" = "disable" ] ; then
+    if [ "${events}" = "d" ] ; then
+      ${service} start > /data/phantomsocks/run/service.log
+    elif [ "${events}" = "n" ] ; then
+      ${service} stop > /data/phantomsocks/run/service.log
+    fi
+  fi
+fi
+}
+
+service_control
